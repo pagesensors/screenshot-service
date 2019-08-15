@@ -60,6 +60,27 @@ module.exports = {
 	 * Methods
 	 */
     methods: {
+        async upsize(page, prevClientHeight = 0) {
+            const metrics = await page._client.send('Page.getLayoutMetrics');
+            clientHeight = Math.ceil(metrics.contentSize.height);
+            if (prevClientHeight !== clientHeight) {
+                const {
+                    width,
+                    isMobile = false,
+                    deviceScaleFactor = 1,
+                    isLandscape = false
+                } = page.viewport() || {};
+                const screenOrientation = isLandscape ? { angle: 90, type: 'landscapePrimary' } : { angle: 0, type: 'portraitPrimary' };
+                // console.log({ mobile: isMobile, width, height: clientHeight, deviceScaleFactor, screenOrientation });
+                await page._client.send('Emulation.setDeviceMetricsOverride', { mobile: isMobile, width, height: clientHeight, deviceScaleFactor, screenOrientation });
+            }
+            // console.time("evaluate 2 " + url);
+            await page.evaluate(() => {
+                return new Promise(resolve => window.__xxrequestAnimationFrame(resolve));
+            });
+            // console.timeEnd("evaluate 2 " + url);
+            return clientHeight;
+        },
         async screenshot(page, options) {
             const { data } = await page._client.send('Page.captureScreenshot', {
                 ...options, fromSurface: true
@@ -70,7 +91,7 @@ module.exports = {
             return await page.screenshot(options);
         },
         async capture(params) {
-            const { url, width } = params;
+            const { url } = params;
             const page = await this.browser.newPage();
             const device = devices['Pixel 2'];
             if (process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR) {
@@ -82,16 +103,9 @@ module.exports = {
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
             }, device.viewport.height * 0.01);
 
-            try {
-                await page.goto(url, { waitUntil: 'load' });
-            } catch (err) {
-                this.logger.error(url, err);
-                return [Buffer.from('')];
-            }
-
             let seen = {};
             let inflight = 0;
-            
+
             page.on('request', request => {
                 if (request.url().match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/)) {
                     // still triggers requestfailed
@@ -109,12 +123,14 @@ module.exports = {
             page.on('requestfinished', request => {
                 if (!seen[request.url()])
                     return;
+
                 inflight -= 1;
             })
 
             page.on('requestfailed', request => {
                 if (!seen[request.url()])
                     return;
+
                 const response = request.response();
                 if (response) {
                     // console.error(request.url(), response.status());
@@ -123,6 +139,12 @@ module.exports = {
             });
 
             await page.setRequestInterception(true);
+            try {
+                await page.goto(url, { waitUntil: 'load' });
+            } catch (err) {
+                this.logger.error(url, err);
+                return [Buffer.from('')];
+            }
 
             const buffers = [];
             console.time("evaluate " + url);
@@ -134,39 +156,25 @@ module.exports = {
                         if (rule.cssRules) {
                             stack.push(...rule.cssRules);
                         } else if (rule instanceof CSSStyleRule && rule.style.cssText.match(/\b([\d\.]+)vh/i)) {
-                            rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d\.]+)vh/gi, (match, vh) => (oneVh * vh) +'px');
+                            rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d\.]+)vh/gi, (match, vh) => (oneVh * vh) + 'px');
                         }
                     } catch (err) {
                         console.error(rule);
                     }
                 }
-
-                const scrollHeight = 100;
-                return new Promise((resolve) => {
-                    let scrollTop = 0;
-                    const f = () => {
-                        window.__xxscrollTo(0, scrollTop);
-                        if (scrollTop <= document.body.clientHeight) {
-                            scrollTop += scrollHeight;
-                            window.__xxrequestAnimationFrame(f, 0);
-                        } else {
-                            window.__xxrequestAnimationFrame(() => {
-                                window.__xxscrollTo(0, 0);
-                                window.__xxrequestAnimationFrame(resolve);
-                            });
-                        }
-                    };
-                    f();
-                });
             }, device.viewport.height * 0.01);
             console.timeEnd("evaluate " + url);
+
+            console.time("upsize " + url);
+            let prevClientHeight = await this.upsize(page);
+            console.timeEnd("upsize " + url);
 
             const sleep = (timeout) => new Promise(resolve => setTimeout(resolve, timeout))
 
             let j = 200; // 20 sec
             let idle = 0;
             console.time("extra network " + url);
-            while (idle < 5 && j > 0) {
+            while (idle <= 5 && j > 0) {
                 while (inflight > 0 && j-- > 0) {
                     idle = 0;
                     await sleep(100);
@@ -174,15 +182,56 @@ module.exports = {
                 idle++;
             }
             console.timeEnd("extra network " + url);
+            await sleep(5000);
 
             console.time("screenshot " + url);
+            let clientHeight = await this.upsize(page, prevClientHeight);
+            // Overwrite clip for full page at all times.
+            const {
+                isMobile = false,
+                deviceScaleFactor = 1,
+                isLandscape = false
+            } = page.viewport() || {};
+            /** @type {!Protocol.Emulation.ScreenOrientation} */
+            const screenOrientation = isLandscape ? { angle: 90, type: 'landscapePrimary' } : { angle: 0, type: 'portraitPrimary' };
+            await page._client.send('Emulation.setDeviceMetricsOverride', { mobile: isMobile, width: device.viewport.width, height: clientHeight, deviceScaleFactor, screenOrientation });
+
+            let captureHeight = Math.floor(Math.floor(16384 / device.viewport.deviceScaleFactor) / device.viewport.height) * device.viewport.width;
+
+            if (captureHeight > clientHeight) {
+                this.logger.info("captureHeight calculated to be less than clientHeight");
+                captureHeight = clientHeight;
+            }
+
+            let frameTop = 0;
+            while (frameTop < clientHeight) {
+                let frameHeight = captureHeight;
+                if (frameTop + frameHeight > clientHeight) {
+                    frameHeight = clientHeight - frameTop;
+                }
+                console.log(url, "clientHeight", clientHeight, "captureHeight", captureHeight, "frameTop", frameTop, "frameHeight", frameHeight)
+                const buffer = await this.pscreenshot(page, {
+                    format: 'png',
+                    clip: {
+                        x: 0,
+                        y: frameTop,
+                        width: device.viewport.width,
+                        height: frameHeight,
+                        scale: 1
+                    }
+                });
+                buffers.push(buffer);
+                frameTop += frameHeight;
+            }
+            /*
             const buffer = await this.pscreenshot(page, {
                 format: 'png',
                 fullPage: true
             });
+            */
             console.timeEnd("screenshot " + url);
 
-            buffers.push(buffer);
+            // buffers.push(buffer);
             await page.close();
             return buffers;
         }
