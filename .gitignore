@@ -1,0 +1,8 @@
+.DS_Store
+.vscode/
+node_modules/
+coverage/
+data/
+npm-debug.log
+yarn-error.log
+.env

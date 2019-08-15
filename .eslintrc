@@ -1,0 +1,28 @@
+{
+    "extends": [
+        "airbnb",
+        "prettier"
+    ],
+    "parserOptions": {
+        "allowImportExportEverywhere": true
+    },
+    "plugins": [
+        "prettier"
+    ],
+    "rules":{
+        "camelcase": 1,
+        "comma-dangle": 2,
+        "quotes": 0,
+        "func-names": 0,
+        "no-unused-vars": 0,
+        "import/prefer-default-export": 0
+    },
+    "globals": {
+        "$": 0
+    },
+    "env": {
+        "browser": true,
+        "node": true,
+        "jest": true
+    }
+}

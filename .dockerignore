@@ -1,0 +1,11 @@
+.DS_Store
+.vscode
+node_modules
+coverage
+data
+test
+Dockerfile
+docker-compose.yml
+npm-debug.log
+yarn-error.log
+.env
