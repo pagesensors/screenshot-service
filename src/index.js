@@ -11,9 +11,12 @@ module.exports = {
 	 */
     settings: {
         chrome_args: [
+            '--no-first-run',
+            '--no-default-browser-check',
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
+            '--disable-web-security',
             '--enable-logging',
             '--use-gl=egl'
         ]
@@ -70,21 +73,26 @@ module.exports = {
             const { url, width } = params;
             const page = await this.browser.newPage();
             const device = devices['Pixel 2'];
-            if (process.env.CHROME_FORCE_SCALE_FACTOR) {
-                device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_SCALE_FACTOR);
+            if (process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR) {
+                device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR);
             }
             await page.emulate(device);
-            await page.setRequestInterception(true);
-            await page.evaluateOnNewDocument(() => {
+            await page.evaluateOnNewDocument((vh) => {
                 window.__xxscrollTo = window.scrollTo;
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
-            })
-            // await page._client.send('Animation.setPlaybackRate', { playbackRate: 12 }); 
+            }, device.viewport.height * 0.01);
 
+            try {
+                await page.goto(url, { waitUntil: 'load' });
+            } catch (err) {
+                this.logger.error(url, err);
+                return [Buffer.from('')];
+            }
+
+            let seen = {};
             let inflight = 0;
-
+            
             page.on('request', request => {
-                inflight += 1;
                 if (request.url().match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/)) {
                     // still triggers requestfailed
                     request.abort();
@@ -92,33 +100,47 @@ module.exports = {
                     if (!request.url().match(/(vts\.com|namely\.com|bettsrecruiting\.com|meltwater\.com|jetasg\.com|numo\.global|kibocommerce\.com|initiative20x20\.org)/)) {
                         // console.log(request.url());
                     }
+                    seen[request.url()] = true;
+                    inflight += 1;
                     request.continue();
                 }
             })
 
             page.on('requestfinished', request => {
+                if (!seen[request.url()])
+                    return;
                 inflight -= 1;
             })
 
             page.on('requestfailed', request => {
+                if (!seen[request.url()])
+                    return;
                 const response = request.response();
-                if (response){
+                if (response) {
                     // console.error(request.url(), response.status());
                 }
                 inflight -= 1;
             });
 
-            try {
-                await page.goto(url, { waitUntil: 'load' });
-            } catch (err) {
-                this.logger.error(url, err);
-                return [ Buffer.from('') ];
-            }
+            await page.setRequestInterception(true);
 
-            const sleep = (timeout) => new Promise(resolve => setTimeout(resolve, timeout))
             const buffers = [];
             console.time("evaluate " + url);
-            await page.evaluate(() => {
+            await page.evaluate((oneVh) => {
+                const stack = Array.from(document.styleSheets);
+                while (stack.length) {
+                    let rule = stack.pop();
+                    try {
+                        if (rule.cssRules) {
+                            stack.push(...rule.cssRules);
+                        } else if (rule instanceof CSSStyleRule && rule.style.cssText.match(/\b([\d\.]+)vh/i)) {
+                            rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d\.]+)vh/gi, (match, vh) => (oneVh * vh) +'px');
+                        }
+                    } catch (err) {
+                        console.error(rule);
+                    }
+                }
+
                 const scrollHeight = 100;
                 return new Promise((resolve) => {
                     let scrollTop = 0;
@@ -136,73 +158,31 @@ module.exports = {
                     };
                     f();
                 });
-            });
+            }, device.viewport.height * 0.01);
             console.timeEnd("evaluate " + url);
 
+            const sleep = (timeout) => new Promise(resolve => setTimeout(resolve, timeout))
+
             let j = 200; // 20 sec
+            let idle = 0;
             console.time("extra network " + url);
-            while (inflight > 0 && j > 0) {
-                await sleep(500);
-                j -= 10;
-                while (inflight > 0 && j > 0) {
+            while (idle < 5 && j > 0) {
+                while (inflight > 0 && j-- > 0) {
+                    idle = 0;
                     await sleep(100);
-                    j -= 1;
                 }
+                idle++;
             }
             console.timeEnd("extra network " + url);
-            const { clientHeight } = await page.evaluate(() => {
-                return new Promise(resolve => {
-                    window.__xxrequestAnimationFrame(
-                        resolve({
-                            clientHeight: document.body.clientHeight
-                        })
-                    )
-                });
-            });
-            await sleep(500);
-
-            const realDeviceWidth = device.viewport.width * device.viewport.deviceScaleFactor;
-            const maxTextureSize = 10 * 1024 * 1024;
-            const maxHeight = (maxTextureSize / realDeviceWidth / device.viewport.deviceScaleFactor);
-            let captureHeight = Math.floor(maxHeight / device.viewport.height) * device.viewport.height;
-
-            if (captureHeight < device.viewport.height) {
-                this.logger.info("captureHeight calculated to be less than device height");
-                captureHeight = device.viewport.height;
-            }
 
             console.time("screenshot " + url);
-            let frameTop = 0;
-            while (frameTop + captureHeight <= clientHeight) {
-                const buffer = await this.screenshot(page, {
-                    format: 'png',
-                    clip: {
-                        x: 0,
-                        y: frameTop,
-                        width: device.viewport.width,
-                        height: captureHeight,
-                        scale: 1
-                    }
-                });
-
-                buffers.push(buffer);
-                frameTop += captureHeight;
-            }
-            if (frameTop < clientHeight) {
-                const buffer = await this.screenshot(page, {
-                    format: 'png',
-                    clip: {
-                        x: 0,
-                        y: frameTop,
-                        width: device.viewport.width,
-                        height: clientHeight - frameTop,
-                        scale: 1
-                    }
-                });
-
-                buffers.push(buffer);
-            }
+            const buffer = await this.pscreenshot(page, {
+                format: 'png',
+                fullPage: true
+            });
             console.timeEnd("screenshot " + url);
+
+            buffers.push(buffer);
             await page.close();
             return buffers;
         }
