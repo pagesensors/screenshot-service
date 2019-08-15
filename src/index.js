@@ -74,11 +74,6 @@ module.exports = {
                 // console.log({ mobile: isMobile, width, height: clientHeight, deviceScaleFactor, screenOrientation });
                 await page._client.send('Emulation.setDeviceMetricsOverride', { mobile: isMobile, width, height: clientHeight, deviceScaleFactor, screenOrientation });
             }
-            // console.time("evaluate 2 " + url);
-            await page.evaluate(() => {
-                return new Promise(resolve => window.__xxrequestAnimationFrame(resolve));
-            });
-            // console.timeEnd("evaluate 2 " + url);
             return clientHeight;
         },
         async screenshot(page, options) {
