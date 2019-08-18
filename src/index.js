@@ -60,30 +60,21 @@ module.exports = {
 	 * Methods
 	 */
     methods: {
-        async upsize(page, prevClientHeight = 0) {
-            const metrics = await page._client.send('Page.getLayoutMetrics');
-            clientHeight = Math.ceil(metrics.contentSize.height);
-            if (prevClientHeight !== clientHeight) {
-                const {
-                    width,
-                    isMobile = false,
-                    deviceScaleFactor = 1,
-                    isLandscape = false
-                } = page.viewport() || {};
-                const screenOrientation = isLandscape ? { angle: 90, type: 'landscapePrimary' } : { angle: 0, type: 'portraitPrimary' };
-                // console.log({ mobile: isMobile, width, height: clientHeight, deviceScaleFactor, screenOrientation });
-                await page._client.send('Emulation.setDeviceMetricsOverride', { mobile: isMobile, width, height: clientHeight, deviceScaleFactor, screenOrientation });
-            }
+        async getClientHeight(page) {
+            // const metrics = await page._client.send('Page.getLayoutMetrics');
+            // clientHeight = Math.ceil(metrics.contentSize.height);
+            const { clientHeight } = await page.evaluate(() => {
+                return { clientHeight: document.body.clientHeight };
+            })
             return clientHeight;
         },
-        async screenshot(page, options) {
-            const { data } = await page._client.send('Page.captureScreenshot', {
-                ...options, fromSurface: true
-            });
-            return Buffer.from(data, 'base64');
-        },
-        async pscreenshot(page, options) {
-            return await page.screenshot(options);
+        async upsize(page, prevClientHeight) {
+            const clientHeight = await this.getClientHeight(page);
+            if (prevClientHeight !== clientHeight) {
+                // console.log(`setting client height from ${prevClientHeight} to ${clientHeight}`);
+                await page.setViewport({ ...page.viewport(), ... { height: clientHeight } });
+            }
+            return clientHeight;
         },
         async capture(params) {
             const { url } = params;
@@ -92,8 +83,9 @@ module.exports = {
             if (process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR) {
                 device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR);
             }
-            await page.emulate(device);
-            await page.evaluateOnNewDocument((vh) => {
+            await page._client.send('Animation.setPlaybackRate', { playbackRate: 1000 })
+            await page.setViewport({ ...device.viewport, ...{ height: 0 } });
+            await page.evaluateOnNewDocument((oneVh) => {
                 window.__xxscrollTo = window.scrollTo;
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
             }, device.viewport.height * 0.01);
@@ -142,27 +134,63 @@ module.exports = {
             }
 
             const buffers = [];
-            console.time("evaluate " + url);
-            await page.evaluate((oneVh) => {
-                const stack = Array.from(document.styleSheets);
-                while (stack.length) {
-                    let rule = stack.pop();
-                    try {
-                        if (rule.cssRules) {
-                            stack.push(...rule.cssRules);
-                        } else if (rule instanceof CSSStyleRule && rule.style.cssText.match(/\b([\d\.]+)vh/i)) {
-                            rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d\.]+)vh/gi, (match, vh) => (oneVh * vh) + 'px');
-                        }
-                    } catch (err) {
-                        console.error(rule);
-                    }
-                }
-            }, device.viewport.height * 0.01);
-            console.timeEnd("evaluate " + url);
 
-            console.time("upsize " + url);
-            let prevClientHeight = await this.upsize(page);
-            console.timeEnd("upsize " + url);
+            // page.on('console', (m) => console.log(m.text()));
+            console.time("evaluate " + url);
+            const allTransitionsEnded = page.evaluate((oneVh, transitionsTimeout) => {
+                return new Promise((resolve, reject) => {
+                    const stack = Array.from(document.styleSheets);
+                    while (stack.length) {
+                        let rule = stack.pop();
+                        try {
+                            if (rule.cssRules) {
+                                stack.push(...rule.cssRules);
+                            } else if (rule instanceof CSSStyleRule && rule.style.cssText.match(/\b([\d\.]+)vh/i)) {
+                                rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d\.]+)vh/gi, (match, vh) => (oneVh * vh) + 'px');
+                            }
+                        } catch (err) {
+                            console.error(rule);
+                        }
+                    }
+
+
+                    let idle = 0;
+                    // Array.from(document.getElementsByTagName('*')).forEach((elem) => { 
+                    [document.body].forEach((elem) => {
+                        elem.addEventListener("transitionstart", () => idle = 0);
+                        elem.addEventListener("transitionend", () =>  idle = 0);
+                        elem.addEventListener("animationstart", () => idle = 0);
+                        elem.addEventListener("animationend", () =>  idle = 0);
+                    });
+                    let interval = setInterval(() => {
+                        if (++idle === 5) {
+                            clearInterval(interval);
+                            resolve();
+                        }
+                        // console.log(`${location}: idle: ${idle}, transitions ${transitions}`);
+                    }, 1000);
+                    setTimeout(() => {
+                        clearInterval(interval);
+                        reject();
+                    }, transitionsTimeout);
+                });
+
+            }, device.viewport.height * 0.01, 20000);
+            // console.timeEnd("evaluate " + url);
+
+            // console.time("upsize 1 " + url);
+            let initialClientHeight = await this.upsize(page);
+            // console.timeEnd("upsize 1 " + url);
+
+            console.time("transitions " + url);
+            try {
+                const reason = await allTransitionsEnded;
+                console.log(`transitions ${url}: ${reason}`);
+            } catch (e) {
+                console.log(`transitions ${url} timed out`);
+            }
+            console.timeEnd("transitions " + url);
+
 
             const sleep = (timeout) => new Promise(resolve => setTimeout(resolve, timeout))
 
@@ -176,22 +204,13 @@ module.exports = {
                 }
                 idle++;
             }
-            console.timeEnd("extra network " + url);
-            await sleep(5000);
+            // console.timeEnd("extra network " + url, idle);
 
-            console.time("screenshot " + url);
-            let clientHeight = await this.upsize(page, prevClientHeight);
-            // Overwrite clip for full page at all times.
-            const {
-                isMobile = false,
-                deviceScaleFactor = 1,
-                isLandscape = false
-            } = page.viewport() || {};
-            /** @type {!Protocol.Emulation.ScreenOrientation} */
-            const screenOrientation = isLandscape ? { angle: 90, type: 'landscapePrimary' } : { angle: 0, type: 'portraitPrimary' };
-            await page._client.send('Emulation.setDeviceMetricsOverride', { mobile: isMobile, width: device.viewport.width, height: clientHeight, deviceScaleFactor, screenOrientation });
 
-            let captureHeight = Math.floor(Math.floor(16384 / device.viewport.deviceScaleFactor) / device.viewport.height) * device.viewport.width;
+            let clientHeight = await this.upsize(page, initialClientHeight);
+
+            let captureHeight = Math.floor(Math.floor(16384 / device.viewport.deviceScaleFactor) / device.viewport.height) * device.viewport.height;
+            // console.log(device.viewport.deviceScaleFactor, Math.floor(16384 / device.viewport.deviceScaleFactor), Math.floor(Math.floor(16384 / device.viewport.deviceScaleFactor) / device.viewport.height), captureHeight);
 
             if (captureHeight > clientHeight) {
                 this.logger.info("captureHeight calculated to be less than clientHeight");
@@ -204,8 +223,8 @@ module.exports = {
                 if (frameTop + frameHeight > clientHeight) {
                     frameHeight = clientHeight - frameTop;
                 }
-                console.log(url, "clientHeight", clientHeight, "captureHeight", captureHeight, "frameTop", frameTop, "frameHeight", frameHeight)
-                const buffer = await this.pscreenshot(page, {
+                // console.log(url, "clientHeight", clientHeight, "captureHeight", captureHeight, "frameTop", frameTop, "frameHeight", frameHeight)
+                const buffer = await page.screenshot({
                     format: 'png',
                     clip: {
                         x: 0,
