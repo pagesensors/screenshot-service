@@ -1,3 +1,4 @@
+/* eslint-disable no-underscore-dangle */
 const async = require('async');
 const devices = require('puppeteer/DeviceDescriptors');
 const puppeteer = require('puppeteer');
@@ -5,73 +6,81 @@ const EventEmitter = require('events')
 
 class NetworkIdle extends EventEmitter {
 
-    construct(page, networkIdle0, networkTimeout) {
-        this.seen = {};
+    constructor(page, networkIdle0, networkTimeout) {
+        super();
+        this.page = page;
+        this.networkIdle0 = networkIdle0;
+        this.networkTimeout = networkTimeout;
         this.lastNetworkRequest = null;
+        this.seen = {};
     }
-    promise() {
+
+    async promise() {
         const self = this;
-
-        if (this.promise)
-            return this.promise;
-
-        return this.promise = new Promise((resolve, reject) => {
-            page.on('request', request => this.registerView(request.url()));
-            page.on('requestfinished', request => this.unregisterView(request.url()));
-            page.on('requestfailed', request => this.unregisterView(request.url()));
-            page.setRequestInterception(true).then(() => {
-                let interval = setInterval(() => {
-                    if (Date.now() - self.lastNetworkRequest >= networkIdle0) {
-                        clearInterval(interval);
-                        resolve();
-                    }
-                }, 100);
-                setTimeout(() => {
+        await Promise.all([
+            this.page.on('request', request => this.registerView(request)),
+            this.page.on('requestfinished', request => this.unregisterView(request)),
+            this.page.on('requestfailed', request => this.unregisterView(request)),
+            this.page.setRequestInterception(true),
+        ]);
+        return new Promise((resolve, reject) => {
+            let timeout;
+            const interval = setInterval(() => {
+                // console.log('Date.now() - self.lastNetworkRequest >= self.networkIdle0', Date.now() - self.lastNetworkRequest, self.networkIdle0);
+                if (Date.now() - self.lastNetworkRequest >= self.networkIdle0) {
                     clearInterval(interval);
-                    if (this.inflight()) {
-                        reject();
-                    } else {
-                        resolve();
-                    }
-                }, networkTimeout);
-            }, (err) => reject(err));
+                    clearTimeout(timeout);
+                    resolve();
+                    // console.log('---------------------- resolved');
+                }
+            }, 100);
+            timeout = setTimeout(() => {
+                // console.log('---------------------- timed out');
+                if (self.inflight()) {
+                    reject(self.inflight());
+                } else {
+                    resolve();
+                }
+                clearInterval(interval);
+                clearTimeout(timeout);
+            }, self.networkTimeout);
         });
-
     }
+
+    // eslint-disable-next-line class-methods-use-this
     url(url) {
         const parsed = new URL(url);
         return `${parsed.host}${parsed.pathname}`;
     }
-    registerView(url) {
-        // if (url.match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/gi)) {
-        //     return request.abort();
-        // }
 
-        const key = this.url();
-        if (!this.urlSeen(url)) {
-            this.seen[key] = this.seen[key] ? this.seen[key] + 1 : 1;
-            request.continue();
-        } else {
-            // aborting duplicate requests to the same url
-            this.emit('duplicate.url.request', url);
-            this.seen[key] = this.seen[key] ? this.seen[key] + 1 : 1;
-            request.abort();
+    registerView(request) {
+        if (request.url().match(/\b(newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com|salesloft\.com)/gi)) {
+            return request.abort();
         }
+
+        const key = this.url(request.url());
+        if (!this.seen[key]) {
+            this.seen[key] = 1;
+        } else {
+            this.seen[key] += 1;
+            // this.emit('duplicate.url.request', key);
+        }
+        request.continue();
         this.lastNetworkRequest = Date.now();
+        return this.seen[key];
     }
-    unregisterView(url) {
-        const key = this.url();
-        if (!urlSeen(url))
+
+    unregisterView(request) {
+        const key = this.url(request.url());
+        if (!this.seen[key])
             return;
 
-        seen[key] -= 1;
+        this.seen[key] -= 1;
         this.lastNetworkRequest = Date.now();
     }
-    urlSeen(url) {
-        return seen[this.url(url)];
-    }
+
     inflight() {
-        return Object.keys(this.seen).filter((key) => seen[key]);
+        return Object.keys(this.seen).filter((key) => this.seen[key]);
     }
 };
 
@@ -90,8 +99,8 @@ module.exports = {
             '--shm-size=128M',
             '--disable-web-security',
             '--enable-logging',
-            '--use-gl=egl'
-        ]
+            '--use-gl=egl',
+        ],
     },
 
 	/**
@@ -115,7 +124,7 @@ module.exports = {
                 width: { type: "number", positive: true, integer: true },
             },
             async handler(ctx) {
-                return await this.queue.push(ctx.params);
+                return this.queue.push(ctx.params);
             },
         },
 
@@ -128,8 +137,8 @@ module.exports = {
         'duplicate.url.request': {
             handler(...args) {
                 console.log(args)
-            }
-        }
+            },
+        },
     },
 
 	/**
@@ -157,7 +166,7 @@ module.exports = {
             const page = await this.browser.newPage();
             const device = devices['Pixel 2'];
             if (process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR) {
-                device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR);
+                device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR, 10);
             }
             await page._client.send('Animation.setPlaybackRate', { playbackRate: 1000 })
             await page.setViewport({ ...device.viewport, ...{ height: 0 } });
@@ -166,25 +175,18 @@ module.exports = {
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
             }, device.viewport.height * 0.01);
 
-            // try {
-                await page.goto(url, { waitUntil: 'load' });
-            // } catch (err) {
-            //     this.logger.error(url, err);
-            //     return [Buffer.from('')];
-            // }
-
-            const buffers = [];
+            await page.goto(url, { waitUntil: 'load' });
 
             const allTransitionsEnded = page.evaluate((oneVh, transitionsIdle0, transitionsTimeout) => {
                 return new Promise((resolve, reject) => {
                     const stack = Array.from(document.styleSheets);
                     while (stack.length) {
-                        let rule = stack.pop();
+                        const rule = stack.pop();
                         try {
                             if (rule.cssRules) {
                                 stack.push(...rule.cssRules);
-                            } else if (rule instanceof CSSStyleRule && rule.style.cssText.match(/\b([\d\.]+)vh/i)) {
-                                rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d\.]+)vh/gi, (match, vh) => (oneVh * vh) + 'px');
+                            } else if (rule instanceof CSSStyleRule && rule.style.cssText.match(/\b([\d.]+)vh/i)) {
+                                rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d.]+)vh/gi, (match, vh) => `${(oneVh * vh)}px`);
                             }
                         } catch (err) {
                             console.error(rule);
@@ -195,52 +197,54 @@ module.exports = {
 
                     // Array.from(document.getElementsByTagName('*')).forEach((elem) => {
                     [document.body].forEach((elem) => {
-                        elem.addEventListener("transitionstart", () => setTimeout(() => idle = 0, 100));
-                        elem.addEventListener("transitionend", () => setTimeout(() => idle = 0, 100));
-                        elem.addEventListener("animationstart", () => setTimeout(() => idle = 0, 100));
-                        elem.addEventListener("animationend", () => setTimeout(() => idle = 0, 100));
+                        elem.addEventListener("transitionstart", () => setTimeout(() => { idle = 0 }, 100));
+                        elem.addEventListener("transitionend", () => setTimeout(() => { idle = 0 }, 100));
+                        elem.addEventListener("animationstart", () => setTimeout(() => { idle = 0 }, 100));
+                        elem.addEventListener("animationend", () => setTimeout(() => { idle = 0 }, 100));
                     });
                     // it is possible to detect repeatedly changed elements
-                    let interval = setInterval(() => {
+                    let timeout;
+                    const interval = setInterval(() => {
+                        // eslint-disable-next-line no-plusplus
                         if (++idle === Math.round(transitionsIdle0 / 100)) {
                             clearInterval(interval);
+                            clearTimeout(timeout);
                             resolve();
                         }
                     }, 100);
-                    setTimeout(() => {
+                    timeout = setTimeout(() => {
                         clearInterval(interval);
+                        clearTimeout(timeout);
+
                         reject();
                     }, transitionsTimeout);
                 });
 
             }, device.viewport.height * 0.01, 5000, 20000);
-            // console.timeEnd("evaluate " + url);
 
             // setting up network tracking before resizing page,
             // because resize might trigger new network requests
-            console.time("extra network " + url);
             const networkIdle = new NetworkIdle(page, 5000, 20000);
-            networkIdle.on('duplicate.url.request', (e) => {
-                console.log(e);
-                this.broker.emit(e)
-            });
+            // networkIdle.on('duplicate.url.request', (e) => this.broker.emit(e));
 
             const initialClientHeight = await this.upsize(page);
+
+            console.time(`extra network ${url}`);
             try {
                 await networkIdle.promise();
-            } catch (e) {
-                console.log(`networkIdle ${url} timed out`);
+            } catch (err) {
+                console.log(`networkIdle ${url} timed out:`, err);
             }
-            console.timeEnd("extra network " + url);
+            console.timeEnd(`extra network ${url}`);
 
-            console.time("transitions " + url);
+            console.time(`transitions ${url}`);
             try {
                 const reason = await allTransitionsEnded;
                 // console.log(`transitions ${url} done`);
-            } catch (e) {
-                console.log(`transitions ${url} timed out`);
+            } catch (err) {
+                console.log(`transitions ${url} timed out:`, err);
             }
-            console.timeEnd("transitions " + url);
+            console.timeEnd(`transitions ${url}`);
 
             const clientHeight = await this.upsize(page, initialClientHeight);
 
@@ -252,32 +256,35 @@ module.exports = {
             }
 
             let frameTop = 0;
-            console.time("screenshot " + url);
+            const screenshots = [];
             while (frameTop < clientHeight) {
                 let frameHeight = captureHeight;
                 if (frameTop + frameHeight > clientHeight) {
                     frameHeight = clientHeight - frameTop;
                 }
                 // console.log(url, "clientHeight", clientHeight, "captureHeight", captureHeight, "frameTop", frameTop, "frameHeight", frameHeight)
-                const buffer = await page.screenshot({
+                const screenshot = page.screenshot({
                     format: 'png',
                     clip: {
                         x: 0,
                         y: frameTop,
                         width: device.viewport.width,
                         height: frameHeight,
-                        scale: 1
-                    }
+                        scale: 1,
+                    },
                 });
-                buffers.push(buffer);
+                screenshots.push(screenshot);
                 frameTop += frameHeight;
             }
-            console.timeEnd("screenshot " + url);
 
-            // buffers.push(buffer);
+            console.time(`screenshot ${url}`);
+            const buffers = await Promise.all(screenshots);
+            console.timeEnd(`screenshot ${url}`);
+
             await page.close();
+
             return buffers;
-        }
+        },
     },
 
 	/**
@@ -305,14 +312,14 @@ module.exports = {
             : this.settings.chrome_args;
         if (process.env.CHROME_WS_ENDPOINT) {
             this.browser = await puppeteer.connect({
-                browserWSEndpoint: process.env.CHROME_WS_ENDPOINT
+                browserWSEndpoint: process.env.CHROME_WS_ENDPOINT,
             });
             this.logger.info("Connected to ", process.env.CHROME_WS_ENDPOINT);
         } else {
-            this.browser = await puppeteer.launch({ args: args });
+            this.browser = await puppeteer.launch({ args });
             this.logger.info("Chrome launched");
         }
-        this.queue = async.queue(async (task) => await this.capture(task), process.env.CHROME_TAB_LIMIT);
+        this.queue = async.queue(async (task) => this.capture(task), process.env.CHROME_TAB_LIMIT);
         this.queue.error(err => this.logger.error(err));
     },
 
