@@ -1,9 +1,9 @@
 const async = require('async');
 const devices = require('puppeteer/DeviceDescriptors');
 const puppeteer = require('puppeteer');
-const fs = require('fs');
+const EventEmitter = require('events')
 
-class NetworkIdle {
+class NetworkIdle extends EventEmitter {
 
     construct(page, networkIdle0, networkTimeout) {
         this.seen = {};
@@ -43,9 +43,9 @@ class NetworkIdle {
         return `${parsed.host}${parsed.pathname}`;
     }
     registerView(url) {
-        if (url.match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/gi)) {
-            return request.abort();
-        }
+        // if (url.match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/gi)) {
+        //     return request.abort();
+        // }
 
         const key = this.url();
         if (!this.urlSeen(url)) {
@@ -53,6 +53,7 @@ class NetworkIdle {
             request.continue();
         } else {
             // aborting duplicate requests to the same url
+            this.emit('duplicate.url.request', url);
             this.seen[key] = this.seen[key] ? this.seen[key] + 1 : 1;
             request.abort();
         }
@@ -124,7 +125,11 @@ module.exports = {
 	 * Events
 	 */
     events: {
-
+        'duplicate.url.request': {
+            handler(...args) {
+                console.log(args)
+            }
+        }
     },
 
 	/**
@@ -161,12 +166,12 @@ module.exports = {
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
             }, device.viewport.height * 0.01);
 
-            try {
+            // try {
                 await page.goto(url, { waitUntil: 'load' });
-            } catch (err) {
-                this.logger.error(url, err);
-                return [Buffer.from('')];
-            }
+            // } catch (err) {
+            //     this.logger.error(url, err);
+            //     return [Buffer.from('')];
+            // }
 
             const buffers = [];
 
@@ -205,7 +210,7 @@ module.exports = {
                     setTimeout(() => {
                         clearInterval(interval);
                         reject();
-                    }, 30000);
+                    }, transitionsTimeout);
                 });
 
             }, device.viewport.height * 0.01, 5000, 20000);
@@ -214,10 +219,15 @@ module.exports = {
             // setting up network tracking before resizing page,
             // because resize might trigger new network requests
             console.time("extra network " + url);
-            const networkIdle = (new NetworkIdle(page, 5000, 20000)).promise();
+            const networkIdle = new NetworkIdle(page, 5000, 20000);
+            networkIdle.on('duplicate.url.request', (e) => {
+                console.log(e);
+                this.broker.emit(e)
+            });
+
             const initialClientHeight = await this.upsize(page);
             try {
-                await networkIdle;
+                await networkIdle.promise();
             } catch (e) {
                 console.log(`networkIdle ${url} timed out`);
             }
