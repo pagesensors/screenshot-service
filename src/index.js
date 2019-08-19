@@ -3,6 +3,77 @@ const devices = require('puppeteer/DeviceDescriptors');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 
+class NetworkIdle {
+
+    construct(page, networkIdle0, networkTimeout) {
+        this.seen = {};
+        this.lastNetworkRequest = null;
+    }
+    promise() {
+        const self = this;
+
+        if (this.promise)
+            return this.promise;
+
+        return this.promise = new Promise((resolve, reject) => {
+            page.on('request', request => this.registerView(request.url()));
+            page.on('requestfinished', request => this.unregisterView(request.url()));
+            page.on('requestfailed', request => this.unregisterView(request.url()));
+            page.setRequestInterception(true).then(() => {
+                let interval = setInterval(() => {
+                    if (Date.now() - self.lastNetworkRequest >= networkIdle0) {
+                        clearInterval(interval);
+                        resolve();
+                    }
+                }, 100);
+                setTimeout(() => {
+                    clearInterval(interval);
+                    if (this.inflight()) {
+                        reject();
+                    } else {
+                        resolve();
+                    }
+                }, networkTimeout);
+            }, (err) => reject(err));
+        });
+
+    }
+    url(url) {
+        const parsed = new URL(url);
+        return `${parsed.host}${parsed.pathname}`;
+    }
+    registerView(url) {
+        if (url.match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/gi)) {
+            return request.abort();
+        }
+
+        const key = this.url();
+        if (!this.urlSeen(url)) {
+            this.seen[key] = this.seen[key] ? this.seen[key] + 1 : 1;
+            request.continue();
+        } else {
+            // aborting duplicate requests to the same url
+            this.seen[key] = this.seen[key] ? this.seen[key] + 1 : 1;
+            request.abort();
+        }
+        this.lastNetworkRequest = Date.now();
+    }
+    unregisterView(url) {
+        const key = this.url();
+        if (!urlSeen(url))
+            return;
+
+        seen[key] -= 1;
+        this.lastNetworkRequest = Date.now();
+    }
+    urlSeen(url) {
+        return seen[this.url(url)];
+    }
+    inflight() {
+        return Object.keys(this.seen).filter((key) => seen[key]);
+    }
+};
+
 module.exports = {
     name: "screenshot-generator",
 
@@ -15,7 +86,7 @@ module.exports = {
             '--no-default-browser-check',
             '--no-sandbox',
             '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
+            '--shm-size=128M',
             '--disable-web-security',
             '--enable-logging',
             '--use-gl=egl'
@@ -90,42 +161,6 @@ module.exports = {
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
             }, device.viewport.height * 0.01);
 
-            let seen = {};
-            let inflight = 0;
-
-            page.on('request', request => {
-                if (request.url().match(/\b(data:image\/(png|gif)|data:application\/x-font|newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com)/)) {
-                    // still triggers requestfailed
-                    request.abort();
-                } else {
-                    if (!request.url().match(/(vts\.com|namely\.com|bettsrecruiting\.com|meltwater\.com|jetasg\.com|numo\.global|kibocommerce\.com|initiative20x20\.org)/)) {
-                        // console.log(request.url());
-                    }
-                    seen[request.url()] = true;
-                    inflight += 1;
-                    request.continue();
-                }
-            })
-
-            page.on('requestfinished', request => {
-                if (!seen[request.url()])
-                    return;
-
-                inflight -= 1;
-            })
-
-            page.on('requestfailed', request => {
-                if (!seen[request.url()])
-                    return;
-
-                const response = request.response();
-                if (response) {
-                    // console.error(request.url(), response.status());
-                }
-                inflight -= 1;
-            });
-
-            await page.setRequestInterception(true);
             try {
                 await page.goto(url, { waitUntil: 'load' });
             } catch (err) {
@@ -135,9 +170,7 @@ module.exports = {
 
             const buffers = [];
 
-            // page.on('console', (m) => console.log(m.text()));
-            console.time("evaluate " + url);
-            const allTransitionsEnded = page.evaluate((oneVh, transitionsTimeout) => {
+            const allTransitionsEnded = page.evaluate((oneVh, transitionsIdle0, transitionsTimeout) => {
                 return new Promise((resolve, reject) => {
                     const stack = Array.from(document.styleSheets);
                     while (stack.length) {
@@ -153,71 +186,63 @@ module.exports = {
                         }
                     }
 
-
                     let idle = 0;
-                    // Array.from(document.getElementsByTagName('*')).forEach((elem) => { 
+
+                    // Array.from(document.getElementsByTagName('*')).forEach((elem) => {
                     [document.body].forEach((elem) => {
-                        elem.addEventListener("transitionstart", () => idle = 0);
-                        elem.addEventListener("transitionend", () =>  idle = 0);
-                        elem.addEventListener("animationstart", () => idle = 0);
-                        elem.addEventListener("animationend", () =>  idle = 0);
+                        elem.addEventListener("transitionstart", () => setTimeout(() => idle = 0, 100));
+                        elem.addEventListener("transitionend", () => setTimeout(() => idle = 0, 100));
+                        elem.addEventListener("animationstart", () => setTimeout(() => idle = 0, 100));
+                        elem.addEventListener("animationend", () => setTimeout(() => idle = 0, 100));
                     });
+                    // it is possible to detect repeatedly changed elements
                     let interval = setInterval(() => {
-                        if (++idle === 5) {
+                        if (++idle === Math.round(transitionsIdle0 / 100)) {
                             clearInterval(interval);
                             resolve();
                         }
-                        // console.log(`${location}: idle: ${idle}, transitions ${transitions}`);
-                    }, 1000);
+                    }, 100);
                     setTimeout(() => {
                         clearInterval(interval);
                         reject();
-                    }, transitionsTimeout);
+                    }, 30000);
                 });
 
-            }, device.viewport.height * 0.01, 20000);
+            }, device.viewport.height * 0.01, 5000, 20000);
             // console.timeEnd("evaluate " + url);
 
-            // console.time("upsize 1 " + url);
-            let initialClientHeight = await this.upsize(page);
-            // console.timeEnd("upsize 1 " + url);
+            // setting up network tracking before resizing page,
+            // because resize might trigger new network requests
+            console.time("extra network " + url);
+            const networkIdle = (new NetworkIdle(page, 5000, 20000)).promise();
+            const initialClientHeight = await this.upsize(page);
+            try {
+                await networkIdle;
+            } catch (e) {
+                console.log(`networkIdle ${url} timed out`);
+            }
+            console.timeEnd("extra network " + url);
 
             console.time("transitions " + url);
             try {
                 const reason = await allTransitionsEnded;
-                console.log(`transitions ${url}: ${reason}`);
+                // console.log(`transitions ${url} done`);
             } catch (e) {
                 console.log(`transitions ${url} timed out`);
             }
             console.timeEnd("transitions " + url);
 
-
-            const sleep = (timeout) => new Promise(resolve => setTimeout(resolve, timeout))
-
-            let j = 200; // 20 sec
-            let idle = 0;
-            console.time("extra network " + url);
-            while (idle <= 5 && j > 0) {
-                while (inflight > 0 && j-- > 0) {
-                    idle = 0;
-                    await sleep(100);
-                }
-                idle++;
-            }
-            // console.timeEnd("extra network " + url, idle);
-
-
-            let clientHeight = await this.upsize(page, initialClientHeight);
+            const clientHeight = await this.upsize(page, initialClientHeight);
 
             let captureHeight = Math.floor(Math.floor(16384 / device.viewport.deviceScaleFactor) / device.viewport.height) * device.viewport.height;
-            // console.log(device.viewport.deviceScaleFactor, Math.floor(16384 / device.viewport.deviceScaleFactor), Math.floor(Math.floor(16384 / device.viewport.deviceScaleFactor) / device.viewport.height), captureHeight);
 
             if (captureHeight > clientHeight) {
-                this.logger.info("captureHeight calculated to be less than clientHeight");
+                // this.logger.info("captureHeight calculated to be less than clientHeight");
                 captureHeight = clientHeight;
             }
 
             let frameTop = 0;
+            console.time("screenshot " + url);
             while (frameTop < clientHeight) {
                 let frameHeight = captureHeight;
                 if (frameTop + frameHeight > clientHeight) {
@@ -237,12 +262,6 @@ module.exports = {
                 buffers.push(buffer);
                 frameTop += frameHeight;
             }
-            /*
-            const buffer = await this.pscreenshot(page, {
-                format: 'png',
-                fullPage: true
-            });
-            */
             console.timeEnd("screenshot " + url);
 
             // buffers.push(buffer);

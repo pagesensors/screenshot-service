@@ -44,7 +44,7 @@ describe("Test 'screenshot-generator' service", () => {
                 'https://www.vts.com/',
                 'https://bettsrecruiting.com/',
                 'https://www.numo.global/',
-                'https://jetasg.com/',
+/*                'https://jetasg.com/', */
                 'https://initiative20x20.org/',
             ].forEach((url) => {
                 const p = broker.call("screenshot-generator.capture", {
