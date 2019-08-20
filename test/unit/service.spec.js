@@ -44,7 +44,7 @@ describe("Test 'screenshot-generator' service", () => {
                 'https://www.vts.com/',
                 'https://bettsrecruiting.com/',
                 'https://www.numo.global/',
-/*                'https://jetasg.com/', */
+                // 'https://jetasg.com/', 
                 'https://initiative20x20.org/',
             ].forEach((url) => {
                 const p = broker.call("screenshot-generator.capture", {
@@ -54,12 +54,18 @@ describe("Test 'screenshot-generator' service", () => {
                 promises.push(p);
             })
             const result = await Promise.all(promises);
-            result.forEach(r => expect(r).toBeInstanceOf(Array));
+            result.forEach(r => expect(r).toBeInstanceOf(Object));
             result.forEach(async (r, i) => {
-                r.forEach(async (buffer, j) => {
+                expect(r.screenshots).toBeInstanceOf(Array);
+                expect(r.links).toBeInstanceOf(Array);
+                expect(typeof r.networkTimedOut).toBe('boolean');
+                expect(typeof r.transitionsTimedOut).toBe('boolean');
+
+                r.screenshots.forEach(async (buffer, j) => {
                     expect(buffer).toBeInstanceOf(Buffer);
                     await writeFileAsync(`${i}-${j}.png`, buffer);
                 });
+        
             });
         });
     });

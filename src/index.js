@@ -2,87 +2,7 @@
 const async = require('async');
 const devices = require('puppeteer/DeviceDescriptors');
 const puppeteer = require('puppeteer');
-const EventEmitter = require('events')
-
-class NetworkIdle extends EventEmitter {
-
-    constructor(page, networkIdle0, networkTimeout) {
-        super();
-        this.page = page;
-        this.networkIdle0 = networkIdle0;
-        this.networkTimeout = networkTimeout;
-        this.lastNetworkRequest = null;
-        this.seen = {};
-    }
-
-    async promise() {
-        const self = this;
-        await Promise.all([
-            this.page.on('request', request => this.registerView(request)),
-            this.page.on('requestfinished', request => this.unregisterView(request)),
-            this.page.on('requestfailed', request => this.unregisterView(request)),
-            this.page.setRequestInterception(true),
-        ]);
-        return new Promise((resolve, reject) => {
-            let timeout;
-            const interval = setInterval(() => {
-                // console.log('Date.now() - self.lastNetworkRequest >= self.networkIdle0', Date.now() - self.lastNetworkRequest, self.networkIdle0);
-                if (Date.now() - self.lastNetworkRequest >= self.networkIdle0) {
-                    clearInterval(interval);
-                    clearTimeout(timeout);
-                    resolve();
-                    // console.log('---------------------- resolved');
-                }
-            }, 100);
-            timeout = setTimeout(() => {
-                // console.log('---------------------- timed out');
-                if (self.inflight()) {
-                    reject(self.inflight());
-                } else {
-                    resolve();
-                }
-                clearInterval(interval);
-                clearTimeout(timeout);
-            }, self.networkTimeout);
-        });
-    }
-
-    // eslint-disable-next-line class-methods-use-this
-    url(url) {
-        const parsed = new URL(url);
-        return `${parsed.host}${parsed.pathname}`;
-    }
-
-    registerView(request) {
-        if (request.url().match(/\b(newrelic\.com|google-analytics\.com|driftt\.com|drift\.com|optimizely\.com|engagio\.com|adroll\.com|bizographics\.com|googleadservices\.com|hotjar\.com|opmnstr\.com|ads\.linkedin\.com|dialogtech\.com|salesloft\.com)/gi)) {
-            return request.abort();
-        }
-
-        const key = this.url(request.url());
-        if (!this.seen[key]) {
-            this.seen[key] = 1;
-        } else {
-            this.seen[key] += 1;
-            // this.emit('duplicate.url.request', key);
-        }
-        request.continue();
-        this.lastNetworkRequest = Date.now();
-        return this.seen[key];
-    }
-
-    unregisterView(request) {
-        const key = this.url(request.url());
-        if (!this.seen[key])
-            return;
-
-        this.seen[key] -= 1;
-        this.lastNetworkRequest = Date.now();
-    }
-
-    inflight() {
-        return Object.keys(this.seen).filter((key) => this.seen[key]);
-    }
-};
+const NetworkIdle = require('./network-idle');
 
 module.exports = {
     name: "screenshot-generator",
@@ -134,9 +54,9 @@ module.exports = {
 	 * Events
 	 */
     events: {
-        'duplicate.url.request': {
+        'screenshot-service.url.duplicate': {
             handler(...args) {
-                console.log(args)
+                this.logger.warn(args);
             },
         },
     },
@@ -145,6 +65,10 @@ module.exports = {
 	 * Methods
 	 */
     methods: {
+        timeEnd(t) {
+            const tdiff = process.hrtime(t);
+            return tdiff[0] * 1000 + tdiff[1] / 1000000;
+        },
         async getClientHeight(page) {
             // const metrics = await page._client.send('Page.getLayoutMetrics');
             // clientHeight = Math.ceil(metrics.contentSize.height);
@@ -165,6 +89,9 @@ module.exports = {
             const { url } = params;
             const page = await this.browser.newPage();
             const device = devices['Pixel 2'];
+
+            let t;
+
             if (process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR) {
                 device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR, 10);
             }
@@ -175,7 +102,9 @@ module.exports = {
                 window.__xxrequestAnimationFrame = window.requestAnimationFrame;
             }, device.viewport.height * 0.01);
 
+            t = process.hrtime();
             await page.goto(url, { waitUntil: 'load' });
+            this.broker.emit(`metrics.${this.name}.goto`, this.timeEnd(t));
 
             const allTransitionsEnded = page.evaluate((oneVh, transitionsIdle0, transitionsTimeout) => {
                 return new Promise((resolve, reject) => {
@@ -189,7 +118,7 @@ module.exports = {
                                 rule.style.cssText = rule.style.cssText.replace(/(?:\b)([\d.]+)vh/gi, (match, vh) => `${(oneVh * vh)}px`);
                             }
                         } catch (err) {
-                            console.error(rule);
+                            // console.error(rule);
                         }
                     }
 
@@ -203,6 +132,7 @@ module.exports = {
                         elem.addEventListener("animationend", () => setTimeout(() => { idle = 0 }, 100));
                     });
                     // it is possible to detect repeatedly changed elements
+                    // and report them for further exclusion from comparison
                     let timeout;
                     const interval = setInterval(() => {
                         // eslint-disable-next-line no-plusplus
@@ -215,7 +145,6 @@ module.exports = {
                     timeout = setTimeout(() => {
                         clearInterval(interval);
                         clearTimeout(timeout);
-
                         reject();
                     }, transitionsTimeout);
                 });
@@ -225,26 +154,34 @@ module.exports = {
             // setting up network tracking before resizing page,
             // because resize might trigger new network requests
             const networkIdle = new NetworkIdle(page, 5000, 20000);
-            // networkIdle.on('duplicate.url.request', (e) => this.broker.emit(e));
+            
+            // eslint-disable-next-line no-shadow
+            networkIdle.on('url.duplicate', url => this.broker.emit(`${this.name}.url.duplicate`, url))
 
             const initialClientHeight = await this.upsize(page);
 
-            console.time(`extra network ${url}`);
+            t = process.hrtime();
+            let networkTimedOut = false;
             try {
                 await networkIdle.promise();
             } catch (err) {
-                console.log(`networkIdle ${url} timed out:`, err);
+                networkTimedOut = true;
+                this.logger.warn(`networkIdle ${url} timed out:`, err);
+                this.broker.emit(`metrics.${this.name}.extra-network-timed-out`, url);
             }
-            console.timeEnd(`extra network ${url}`);
+            this.broker.emit(`metrics.${this.name}.extra-network`, this.timeEnd(t));
+           
 
-            console.time(`transitions ${url}`);
+            t = process.hrtime();
+            let transitionsTimedOut = false;
             try {
-                const reason = await allTransitionsEnded;
-                // console.log(`transitions ${url} done`);
+                await allTransitionsEnded;
             } catch (err) {
-                console.log(`transitions ${url} timed out:`, err);
+                transitionsTimedOut = true;
+                this.logger.warn(`transitions ${url} timed out:`, err);
+                this.broker.emit(`metrics.${this.name}.transitions-timed-out`, url);
             }
-            console.timeEnd(`transitions ${url}`);
+            this.broker.emit(`metrics.${this.name}.transitions`, this.timeEnd(t));
 
             const clientHeight = await this.upsize(page, initialClientHeight);
 
@@ -256,14 +193,13 @@ module.exports = {
             }
 
             let frameTop = 0;
-            const screenshots = [];
+            const screenshotPromises = [];
             while (frameTop < clientHeight) {
                 let frameHeight = captureHeight;
                 if (frameTop + frameHeight > clientHeight) {
                     frameHeight = clientHeight - frameTop;
                 }
-                // console.log(url, "clientHeight", clientHeight, "captureHeight", captureHeight, "frameTop", frameTop, "frameHeight", frameHeight)
-                const screenshot = page.screenshot({
+                const screenshotPromise = page.screenshot({
                     format: 'png',
                     clip: {
                         x: 0,
@@ -273,17 +209,37 @@ module.exports = {
                         scale: 1,
                     },
                 });
-                screenshots.push(screenshot);
+                screenshotPromises.push(screenshotPromise);
                 frameTop += frameHeight;
             }
 
-            console.time(`screenshot ${url}`);
-            const buffers = await Promise.all(screenshots);
-            console.timeEnd(`screenshot ${url}`);
+            const links = await page.evaluate(() => {
+                // eslint-disable-next-line no-shadow
+                const links = new Set();
+                const { hostname } = window.location;
+                Array.from(document.links).forEach((l) => {
+                    // eslint-disable-next-line no-shadow
+                    const url = new URL(l.href);
+                    if (url.hostname.indexOf(hostname) !== -1) {
+                        links.add(l.href);
+                    }
+                });
+                return Array.from(links);
+            });
+
+
+            t = process.hrtime();
+            const screenshots = await Promise.all(screenshotPromises);
+            this.broker.emit(`metrics.${this.name}.screenshot`, this.timeEnd(t));
 
             await page.close();
 
-            return buffers;
+            return {
+                screenshots,
+                links,
+                networkTimedOut,
+                transitionsTimedOut,
+            };
         },
     },
 
