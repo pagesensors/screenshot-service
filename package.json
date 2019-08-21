@@ -1,7 +1,7 @@
 {
-    "name": "page-storage",
+    "name": "screenshot-service",
     "version": "1.0.0",
-    "description": "Page Storage microservice",
+    "description": "Screenshot microservice",
     "scripts": {
         "dev": "moleculer-runner --repl --hot src/index.js",
         "start": "moleculer-runner src/index.js",
