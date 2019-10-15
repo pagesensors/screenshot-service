@@ -29,7 +29,9 @@
     "dependencies": {
         "async": "^3.1.0",
         "moleculer": "^0.13.0",
-        "puppeteer": "^1.20.0"
+        "pngjs": "^3.4.0",
+        "puppeteer": "^1.20.0",
+        "yargs": "^14.2.0"
     },
     "engines": {
         "node": ">= 8.x.x"
