@@ -65,7 +65,6 @@ describe("Test 'screenshot-generator' service", () => {
                     expect(buffer).toBeInstanceOf(Buffer);
                     await writeFileAsync(`${i}-${j}.png`, buffer);
                 });
-        
             });
         });
     });
