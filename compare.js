@@ -108,6 +108,7 @@ function QDiff(h1, h2) {
                 // doing nothing
                 console.error(e);
             }
+            seen[url] = true;
             i += 1;
         }
     }
