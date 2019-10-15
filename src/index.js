@@ -70,12 +70,13 @@ module.exports = {
             return tdiff[0] * 1000 + tdiff[1] / 1000000;
         },
         async getClientHeight(page) {
-            // const metrics = await page._client.send('Page.getLayoutMetrics');
-            // clientHeight = Math.ceil(metrics.contentSize.height);
-            const { clientHeight } = await page.evaluate(() => {
-                return { clientHeight: document.body.clientHeight };
-            })
-            return clientHeight;
+            const metrics = await page._client.send('Page.getLayoutMetrics');
+            return Math.ceil(metrics.contentSize.height);
+            // breaks for clari.com where document.body.clientHeight is equal to screen height
+            // const { clientHeight } = await page.evaluate(() => {
+            //     return { clientHeight: document.body.clientHeight };
+            // })
+            // return clientHeight;
         },
         async upsize(page, prevClientHeight) {
             const clientHeight = await this.getClientHeight(page);
@@ -88,13 +89,15 @@ module.exports = {
         async capture(params) {
             const { url } = params;
             const page = await this.browser.newPage();
-            const device = devices['Pixel 2'];
+            // const device = devices['Pixel 2'];
+            const device = devices['Kindle Fire HDX landscape'];
 
             let t;
 
             if (process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR) {
                 device.viewport.deviceScaleFactor = parseInt(process.env.CHROME_FORCE_DEVICE_SCALE_FACTOR, 10);
             }
+
             await page._client.send('Animation.setPlaybackRate', { playbackRate: 1000 })
             await page.setViewport({ ...device.viewport, ...{ height: 0 } });
             await page.evaluateOnNewDocument((oneVh) => {
