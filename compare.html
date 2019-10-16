@@ -3,7 +3,10 @@
     <head>
         <script src="https://cdn.knightlab.com/libs/juxtapose/latest/js/juxtapose.min.js"></script>
         <link rel="stylesheet" href="https://cdn.knightlab.com/libs/juxtapose/latest/css/juxtapose.css">
-
+        <style>
+            li { border: 1px solid transparent; }
+            li.selected { border-color: black; }
+        </style>
     </head>
 
     <body>
@@ -39,10 +42,14 @@
             window.images.forEach((filename) => {
                 const li = document.createElement('li');
                 li.innerHTML = `<a href="#">${filename}</a>`;
-                li.addEventListener('click', () => setImages(filename));
+                li.addEventListener('click', () => {
+                    setImages(filename)
+                    Array.from(list.querySelectorAll('li')).forEach(el => el.classList.remove('selected'))
+                    li.classList.add('selected');
+                });
                 list.appendChild(li);
             })
-            
+
             setImages(images[0]);
         </script>
     </body>

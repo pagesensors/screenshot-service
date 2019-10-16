@@ -177,7 +177,9 @@ function QDiff(h1, h2) {
                             const filename = `${safe}-${j}.png`;
                             // eslint-disable-next-line no-await-in-loop
                             await writeFileAsync(`${dir}/${filename}`, buffer);
-                            filenames.push(filename);
+                            if (k === 0) {
+                                filenames.push(filename);
+                            }
                             // eslint-disable-next-line no-await-in-loop
                             // const histogram = await Histogram(buffer);
                             // histograms.push(histogram);
