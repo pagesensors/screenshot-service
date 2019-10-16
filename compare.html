@@ -6,6 +6,13 @@
         <style>
             select { display: block; width: 60%; margin: 8px auto }
             #slider { margin: 0 auto;  }
+            div.jx-image img {
+                height: initial;
+                width: initial;
+            }
+            div.jx-image.jx-right img {
+                bottom: initial;
+            }
         </style>
     </head>
 
@@ -29,11 +36,11 @@
                         }
                     ],
                     {
-                        animate: true,
-                        showLabels: true,
-                        showCredits: true,
+                        animate: false,
+                        showLabels: false,
+                        showCredits: false,
                         startingPosition: "50%",
-                        makeResponsive: true
+                        makeResponsive: false
                     });
             }
             const list = document.getElementById('image-list');
