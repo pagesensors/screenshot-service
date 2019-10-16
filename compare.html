@@ -4,9 +4,8 @@
         <script src="https://cdn.knightlab.com/libs/juxtapose/latest/js/juxtapose.min.js"></script>
         <link rel="stylesheet" href="https://cdn.knightlab.com/libs/juxtapose/latest/css/juxtapose.css">
         <style>
-            select { width: 100%; margin: 8px }
+            select { display: block; width: 60%; margin: 8px auto }
             #slider { margin: 0 auto;  }
-
         </style>
     </head>
 
@@ -24,11 +23,9 @@
                     [
                         {
                             src: window.dirs[0] + '/' + filename,
-                            label: window.dirs[0] + '/' + filename,
                         },
                         {
                             src: window.dirs[1] + '/' + filename,
-                            label: window.dirs[1] + '/' + filename,
                         }
                     ],
                     {
