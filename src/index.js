@@ -1,6 +1,5 @@
 /* eslint-disable no-underscore-dangle */
 const async = require('async');
-const devices = require('puppeteer/DeviceDescriptors');
 const puppeteer = require('puppeteer');
 const NetworkIdle = require('./network-idle');
 
@@ -36,12 +35,30 @@ module.exports = {
         /**
          * capture
 		 * @param {String} url - page url
-		 * @param {String} width - image width
+		 * @param {Object} device - image width
          */
         capture: {
             params: {
                 url: { type: "url" },
-                width: { type: "number", positive: true, integer: true },
+                device: {
+                    type: "object",
+                    props: {
+                        viewport: {
+                            type: "object",
+                            props: {
+                                width: { type: "number", positive: true, integer: true },
+                                height: { type: "number", positive: true, integer: true },
+                                deviceScaleFactor: { type: "number", positive: true },
+                                isMobile: { type: "boolean" },
+                                hasTouch: { type: "boolean" },
+                                isLandscape: { type: "boolean" },
+                            },
+                        },
+                        userAgent: {
+                            type: "string",
+                        },
+                    },
+                },
             },
             async handler(ctx) {
                 return this.queue.push(ctx.params);
@@ -72,11 +89,6 @@ module.exports = {
         async getClientHeight(page) {
             const metrics = await page._client.send('Page.getLayoutMetrics');
             return Math.ceil(metrics.contentSize.height);
-            // breaks for clari.com where document.body.clientHeight is equal to screen height
-            // const { clientHeight } = await page.evaluate(() => {
-            //     return { clientHeight: document.body.clientHeight };
-            // })
-            // return clientHeight;
         },
         async upsize(page, prevClientHeight) {
             const clientHeight = await this.getClientHeight(page);
@@ -87,10 +99,8 @@ module.exports = {
             return clientHeight;
         },
         async capture(params) {
-            const { url } = params;
+            const { url, device } = params;
             const page = await this.browser.newPage();
-            // const device = devices['Pixel 2'];
-            const device = devices['Kindle Fire HDX landscape'];
 
             let t;
 
@@ -157,7 +167,7 @@ module.exports = {
             // setting up network tracking before resizing page,
             // because resize might trigger new network requests
             const networkIdle = new NetworkIdle(page, 5000, 20000);
-            
+
             // eslint-disable-next-line no-shadow
             networkIdle.on('url.duplicate', url => this.broker.emit(`${this.name}.url.duplicate`, url))
 
@@ -173,7 +183,7 @@ module.exports = {
                 this.broker.emit(`metrics.${this.name}.extra-network-timed-out`, url);
             }
             this.broker.emit(`metrics.${this.name}.extra-network`, this.timeEnd(t));
-           
+
 
             t = process.hrtime();
             let transitionsTimedOut = false;

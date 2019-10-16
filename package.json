@@ -28,6 +28,7 @@
     },
     "dependencies": {
         "async": "^3.1.0",
+        "glob": "^7.1.4",
         "moleculer": "^0.13.0",
         "pngjs": "^3.4.0",
         "puppeteer": "^1.20.0",

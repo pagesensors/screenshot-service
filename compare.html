@@ -1,0 +1,50 @@
+<html>
+
+    <head>
+        <script src="https://cdn.knightlab.com/libs/juxtapose/latest/js/juxtapose.min.js"></script>
+        <link rel="stylesheet" href="https://cdn.knightlab.com/libs/juxtapose/latest/css/juxtapose.css">
+
+    </head>
+
+    <body>
+        <ul id="image-list"></ul>
+        <div id="slider"></div>
+        <script src="./results.js"></script>
+        <script>
+            const setImages = (filename) => {
+                document.getElementById("slider").remove();
+                const div = document.createElement('DIV');
+                div.setAttribute('id', 'slider');
+                document.body.appendChild(div);
+                slider = new juxtapose.JXSlider('#slider',
+                    [
+                        {
+                            src: window.dirs[0] + '/' + filename,
+                            label: window.dirs[0] + '/' + filename,
+                        },
+                        {
+                            src: window.dirs[1] + '/' + filename,
+                            label: window.dirs[1] + '/' + filename,
+                        }
+                    ],
+                    {
+                        animate: true,
+                        showLabels: true,
+                        showCredits: true,
+                        startingPosition: "50%",
+                        makeResponsive: true
+                    });
+            }
+            const list = document.getElementById('image-list');
+            window.images.forEach((filename) => {
+                const li = document.createElement('li');
+                li.innerHTML = `<a href="#">${filename}</a>`;
+                li.addEventListener('click', () => setImages(filename));
+                list.appendChild(li);
+            })
+            
+            setImages(images[0]);
+        </script>
+    </body>
+
+</html>

@@ -1,19 +1,78 @@
-const { ServiceBroker } = require("moleculer");
 const fs = require('fs');
 const writeFileAsync = require('util').promisify(fs.writeFile);
 const URL = require('url');
 const yargs = require('yargs');
+const devices = require('puppeteer/DeviceDescriptors');
 const { PNG } = require('pngjs');
+const { ServiceBroker } = require("moleculer");
+const Service = require("./src");
+
+const emulatedDevices = [
+    {
+        name: 'Desktop 1920x1080',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
+        viewport: {
+            width: 1920,
+            height: 1080,
+        },
+    },
+    {
+        name: 'Desktop 1440x960',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
+        viewport: {
+            width: 1440,
+            height: 960,
+        },
+    },
+    {
+        name: 'Laptop 1280x800',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
+        viewport: {
+            width: 1280,
+            height: 800,
+        },
+    },
+    {
+        name: 'Desktop 1024x768',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
+        viewport: {
+            width: 1024,
+            height: 768,
+        },
+    },
+    devices['Pixel 2'],
+    devices['iPhone 8'],
+    // eslint-disable-next-line dot-notation
+    devices['iPad'],
+];
 
 const { argv } = yargs
     .option('from', {
         type: 'string',
+        demand: true,
     })
     .option('to', {
         type: 'string',
+        demand: true,
+    })
+    .option('device', {
+        choices: emulatedDevices.map(d => d.name),
+        demand: true,
+    })
+    .option('exclude', {
+        type: 'array',
+    })
+    .option('rewrite', {
+        type: 'array',
     });
 
-const Service = require("./src");
+const device = devices[argv.device];
+const rewrites = [];
+argv.rewrite.forEach(s => {
+    const rewrite = s.match(/s(.)(.*?)\1(.*?)\1([gmis]?)/).slice(2);
+    rewrite[0] = new RegExp(rewrite[0], rewrite[2]);
+    rewrites.push(rewrite.slice(0, 2));
+});
 
 function Histogram(data) {
     // const png = PNG.parse(data);
@@ -60,15 +119,16 @@ function QDiff(h1, h2) {
     broker.createService(Service);
     await broker.start();
 
+    const filenames = [];
     const seen = {};
     let urls = [ argv.from ];
     let i = 0;
     while (urls.length && i < 100) {
         const url = urls.shift().replace(/#.*/, '');
         if (!seen[url]) {
+            const orig = URL.parse(url);
 
             try {
-                const orig = URL.parse(url);
                 const alt = URL.parse(argv.to);
                 alt.pathname = orig.pathname;
 
@@ -79,12 +139,29 @@ function QDiff(h1, h2) {
                     // eslint-disable-next-line no-await-in-loop
                     const result = await broker.call("screenshot-generator.capture", {
                         url: stack[k].format(),
-                        width: 1280,
+                        device,
                     });
 
                     if (result) {
                         // console.log(result);
-                        urls = [...urls, ...(result.links.filter(l => l.match(/^https:\/\//) && !l.match(/gnk=job/) && !l.match(/blog\/topic/) && !l.match(/blog\/p\d+$/)))];
+                        if (k === 0) {
+                            const filtered = [];
+                            result.links.forEach(link => {
+                                let exclude = false;
+                                rewrites.forEach(rewrite => {
+                                    // eslint-disable-next-line no-param-reassign
+                                    link = link.replace(...rewrite);
+                                })
+                                argv.exclude.forEach(pattern => {
+                                    if ((new RegExp(pattern)).test(link)) {
+                                        exclude = true;
+                                    }
+                                });
+                                if (!exclude) 
+                                    filtered.push(link);
+                            })
+                            urls = [...urls, ...filtered];
+                        }
 
                         const dir = stack[k].host;
                         if (!fs.existsSync(dir)) {
@@ -93,25 +170,32 @@ function QDiff(h1, h2) {
                         const safe = stack[k].pathname.replace(/\W+/g, '-');
                         for(let j = 0; j < result.screenshots.length; j +=1) {
                             const buffer = result.screenshots[j];
+                            const filename = `${safe}-${j}.png`;
                             // eslint-disable-next-line no-await-in-loop
-                            await writeFileAsync(`${dir}/${safe}-${j}.png`, buffer);
+                            await writeFileAsync(`${dir}/${filename}`, buffer);
+                            filenames.push(filename);
                             // eslint-disable-next-line no-await-in-loop
-                            const histogram = await Histogram(buffer);
-                            histograms.push(histogram);
+                            // const histogram = await Histogram(buffer);
+                            // histograms.push(histogram);
 
                         }
                     }
                 }
-                console.log("qdiff: ", QDiff(histograms[0], histograms[1]));
+                // console.log("qdiff: ", QDiff(histograms[0], histograms[1]));
 
             } catch (e) {
                 // doing nothing
                 console.error(e);
             }
-            seen[url] = true;
+            seen[orig.format()] = true;
             i += 1;
         }
     }
+
+    await writeFileAsync('results.js', `
+        window.dirs = ${JSON.stringify([URL.parse(argv.from).host, URL.parse(argv.to).host])};
+        window.images = ${JSON.stringify(filenames)};
+    `);
 
     await broker.stop();
 
