@@ -59,6 +59,10 @@ const { argv } = yargs
         choices: emulatedDevices.map(d => d.name),
         demand: true,
     })
+    .option('limit', {
+        type: 'number',
+        default: 100,        
+    })
     .option('exclude', {
         type: 'array',
     })
@@ -123,7 +127,7 @@ function QDiff(h1, h2) {
     const seen = {};
     let urls = [ argv.from ];
     let i = 0;
-    while (urls.length && i < 100) {
+    while (urls.length && i < argv.limit) {
         const url = urls.shift().replace(/#.*/, '');
         if (!seen[url]) {
             const orig = URL.parse(url);
