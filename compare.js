@@ -7,44 +7,60 @@ const { PNG } = require('pngjs');
 const { ServiceBroker } = require("moleculer");
 const Service = require("./src");
 
-const emulatedDevices = [
-    {
+const emulatedDevices = {
+    'Desktop 1920x1080': {
         name: 'Desktop 1920x1080',
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
         viewport: {
             width: 1920,
             height: 1080,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            isLandscape: false,
         },
     },
-    {
+    'Desktop 1440x960': {
         name: 'Desktop 1440x960',
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
         viewport: {
             width: 1440,
             height: 960,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            isLandscape: false,
         },
     },
-    {
-        name: 'Laptop 1280x800',
+    'Desktop 1280x800': {
+        name: 'Desktop 1280x800',
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
         viewport: {
             width: 1280,
             height: 800,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            isLandscape: false,
         },
     },
-    {
+    'Desktop 1024x768': {
         name: 'Desktop 1024x768',
         userAgent: 'Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/68.0.3440.75 Safari/537.36',
         viewport: {
             width: 1024,
             height: 768,
+            deviceScaleFactor: 1,
+            isMobile: false,
+            hasTouch: false,
+            isLandscape: false,
         },
     },
-    devices['Pixel 2'],
-    devices['iPhone 8'],
+    'Pixel 2' : devices['Pixel 2'],
+    'iPhone 8': devices['iPhone 8'],
     // eslint-disable-next-line dot-notation
-    devices['iPad'],
-];
+    'iPad': devices['iPad'],
+};
 
 const { argv } = yargs
     .option('from', {
@@ -56,7 +72,7 @@ const { argv } = yargs
         demand: true,
     })
     .option('device', {
-        choices: emulatedDevices.map(d => d.name),
+        choices: Object.keys(emulatedDevices),
         demand: true,
     })
     .option('limit', {
@@ -70,7 +86,8 @@ const { argv } = yargs
         type: 'array',
     });
 
-const device = devices[argv.device];
+const device = emulatedDevices[argv.device];
+
 const rewrites = [];
 argv.rewrite.forEach(s => {
     const rewrite = s.match(/s(.)(.*?)\1(.*?)\1([gmis]?)/).slice(2);
