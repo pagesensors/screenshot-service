@@ -162,7 +162,7 @@ module.exports = {
                     }, transitionsTimeout);
                 });
 
-            }, device.viewport.height * 0.01, 5000, 20000);
+            }, device.viewport.height * 0.01, 300, 20000);
 
             // setting up network tracking before resizing page,
             // because resize might trigger new network requests
